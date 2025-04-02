@@ -1,5 +1,4 @@
 # portpulse.py
-
 import argparse
 from datetime import datetime
 from core.fetch import fetch_price_data, fetch_vix_data, fetch_fear_greed_index, fetch_interest_rate
@@ -9,10 +8,24 @@ from core.backtest import run_backtest, compute_performance_metrics, print_perfo
 from core.optimize import run_optimization
 from rich import print
 
+# ✅ 누락 컬럼 보완 함수 포함
+def normalize_adjclose(df):
+    if "AdjClose" not in df.columns:
+        if "Adj Close" in df.columns:
+            df["AdjClose"] = df["Adj Close"]
+        elif "close" in df.columns:
+            df["AdjClose"] = df["close"]
+        elif "Close" in df.columns:
+            df["AdjClose"] = df["Close"]
+    if "Close" not in df.columns and "AdjClose" in df.columns:
+        df["Close"] = df["AdjClose"]
+    return df
+
 
 def analyze_today():
-    print("[bold cyan]\n📊 오늘의 시장 지표 및 기술 지표 기반 분석\n[/bold cyan]")
+    print("\n[bold cyan]📊 오늘의 시장 지표 및 기술 지표 기반 분석[/bold cyan]\n")
     tsla_df, tsll_df = fetch_price_data()
+    tsla_df = normalize_adjclose(tsla_df)
     tsla_df = add_technical_indicators(tsla_df)
     latest_date = tsla_df.index[-1]
     latest = tsla_df.loc[latest_date]
@@ -49,8 +62,9 @@ def analyze_today():
 
 
 def run_backtest_mode():
-    print("\n[bold cyan]📈 백테스트 모드 실행 중...\n[/bold cyan]")
+    print("\n[bold cyan]📈 백테스트 모드 실행 중...[/bold cyan]\n")
     tsla_df, tsll_df = fetch_price_data()
+    tsla_df = normalize_adjclose(tsla_df)
     tsla_df = add_technical_indicators(tsla_df)
     strategy_vals, tsla_vals, tsll_vals = run_backtest(tsla_df, tsll_df)
     strat_metrics = compute_performance_metrics(strategy_vals)
@@ -62,6 +76,7 @@ def run_backtest_mode():
 def run_simulation_mode(start, end):
     print(f"\n[bold cyan]🧪 시뮬레이션 모드 실행 중: {start} ~ {end}[/bold cyan]\n")
     tsla_df, tsll_df = fetch_price_data(start=start, end=end)
+    tsla_df = normalize_adjclose(tsla_df)
     tsla_df = add_technical_indicators(tsla_df)
     strategy_vals, tsla_vals, tsll_vals = run_backtest(tsla_df, tsll_df)
     strat_metrics = compute_performance_metrics(strategy_vals)
