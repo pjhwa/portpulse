@@ -24,18 +24,31 @@ def init_db():
     conn.close()
 
 def save_prices(df, ticker):
+    from data.db import DB_FILE
+
     conn = sqlite3.connect(DB_FILE, check_same_thread=False)
     df = df.copy()
-    df = df.rename(columns=str.lower)
+
+    # ✅ 모든 컬럼을 소문자로 통일
+    df.columns = [col.lower() for col in df.columns]
+
+    # ✅ 누락된 'close' 컬럼을 'adjclose'로 보완
+    if 'close' not in df.columns and 'adjclose' in df.columns:
+        df['close'] = df['adjclose']
+
+    # ✅ 필수 컬럼 확인
     cols = ['open', 'high', 'low', 'close', 'adjclose', 'volume']
-    if not all(col in df.columns for col in cols):
-        missing = [col for col in cols if col not in df.columns]
+    missing = [col for col in cols if col not in df.columns]
+    if missing:
         print(f"[에러] {ticker} 저장 실패. 누락된 컬럼: {missing}")
         return
+
+    # ✅ 날짜 컬럼 생성 및 정리
     df['date'] = df.index.astype(str)
     df['ticker'] = ticker
     df[cols] = df[cols].astype(float)
     df = df[['date', 'ticker'] + cols]
+
     df.to_sql("prices", conn, if_exists="append", index=False)
     conn.close()
 
