@@ -118,4 +118,15 @@ def run_optimization(metric="sharpe"):
     plt.legend()
     plt.tight_layout()
     plt.savefig("equity_curve.png")
+    pd.Series(tsla_vals).to_csv("best_tsla_curve.csv")
+    pd.Series(tsll_vals).to_csv("best_tsll_curve.csv")
+
+    import yfinance as yf
+    start, end = tsla_df.index[0], tsla_df.index[-1]
+    spy = yf.Ticker("SPY").history(start=start, end=end)['Close']
+    qqq = yf.Ticker("QQQ").history(start=start, end=end)['Close']
+    spy = spy / spy.iloc[0] * 100
+    qqq = qqq / qqq.iloc[0] * 100
+    spy.to_csv("best_spy_curve.csv")
+    qqq.to_csv("best_qq_curve.csv")
     print("\n📁 결과 저장됨: best_strategy_summary.csv, equity_curve.png")
