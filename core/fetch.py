@@ -4,31 +4,30 @@ import pandas as pd
 import requests
 from data.db import load_prices, save_prices, init_db
 
-# DB 초기화
+# DB 초기화 (최초 1회 실행)
 init_db()
 
 def fetch_price_data(start="2022-07-01", end=None):
-    # DB 우선 조회
+    # 먼저 DB에서 조회
     tsla = load_prices("TSLA", start)
     tsll = load_prices("TSLL", start)
 
+    # 존재하지 않으면 API 호출 후 저장
     if tsla is None:
-        tsla = yf.Ticker("TSLA").history(start=start, end=end, auto_adjust=False)
-        if not tsla.empty:
-            tsla["AdjClose"] = tsla["Adj Close"] if "Adj Close" in tsla.columns else tsla["Close"]
-            save_prices(tsla, "TSLA")
-
+        tsla = yf.Ticker("TSLA").history(start=start, end=end, auto_adjust=True)
+        tsla.rename(columns={"Close": "AdjClose"}, inplace=True)
+        save_prices(tsla, "TSLA")
     if tsll is None:
-        tsll = yf.Ticker("TSLL").history(start=start, end=end, auto_adjust=False)
-        if not tsll.empty:
-            tsll["AdjClose"] = tsll["Adj Close"] if "Adj Close" in tsll.columns else tsll["Close"]
-            save_prices(tsll, "TSLL")
+        tsll = yf.Ticker("TSLL").history(start=start, end=end, auto_adjust=True)
+        tsll.rename(columns={"Close": "AdjClose"}, inplace=True)
+        save_prices(tsll, "TSLL")
 
     return tsla, tsll
 
 def fetch_vix_data():
     vix = yf.Ticker("^VIX").history(period="6mo")
-    return vix['Close']
+    vix_data = vix['Close']
+    return vix_data
 
 def fetch_fear_greed_index():
     try:
@@ -39,8 +38,7 @@ def fetch_fear_greed_index():
         return None
 
 def fetch_interest_rate():
-    try:
-        fed = yf.Ticker("^TNX").history(period="6mo")
-        return float(fed['Close'].iloc[-1]) / 10
-    except:
-        return None
+    fed = yf.download("^TNX", period="7d", interval="1d", progress=False, auto_adjust=False)
+    if 'Close' in fed.columns and not fed.empty:
+        return fed['Close'].iloc[-1] / 10  # ^TNX 단위는 x10
+    return 4.0  # fallback
