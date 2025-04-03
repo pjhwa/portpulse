@@ -1,4 +1,4 @@
-# signal.py
+# core/signal.py
 import pandas as pd
 import numpy as np
 
@@ -87,11 +87,11 @@ def explain_allocation_reason(rsi, macd, signal, hist, price, bb_upper, bb_lower
         lines.append(f"MACD({macd:.2f}) ≤ Signal({signal:.2f}) → 하락 모멘텀(-1)")
 
     if price < bb_lower:
-        lines.append("가격이 Bollinger 밴드 하단 이하 → 반등 기대(+1)")
+        lines.append("주가가 Bollinger 밴드 하단 이하 → 반등 기대(+1)")
     elif price > bb_upper:
-        lines.append("가격이 Bollinger 밴드 상단 이상 → 과열 우려(-1)")
+        lines.append("주가가 Bollinger 밴드 상단 이상 → 과열 우려(-1)")
     else:
-        lines.append("가격이 Bollinger 밴드 내 중립 영역에 있음")
+        lines.append("주가가 Bollinger 밴드 내 중립 영역에 있음")
 
     if atr > 0.05 * price:
         lines.append(f"ATR 변동성({atr:.2f}) 높음 → 리스크 회피(-1)")
