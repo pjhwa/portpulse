@@ -1,4 +1,4 @@
-# backtest.py
+# core/backtest.py
 import pandas as pd
 import numpy as np
 from rich.console import Console
@@ -7,33 +7,62 @@ from rich.table import Table
 def run_backtest(tsla_df, tsll_df, allocation_fn=None):
     """
     백테스트를 수행하여 전략 수익률, TSLA 단독 보유, TSLL 단독 보유 수익곡선을 반환합니다.
+
+    Parameters:
+    - tsla_df: TSLA 주가 데이터프레임
+    - tsll_df: TSLL 주가 데이터프레임
+    - allocation_fn: 비중 결정 함수 (기본값: None, TSLA 100%)
+
+    Returns:
+    - 전략 포트폴리오, TSLA 단독, TSLL 단독의 수익 시리즈
     """
+    # 공통 날짜 인덱스 추출
+    common_dates = tsla_df.index.intersection(tsll_df.index)
+    tsla_df = tsla_df.loc[common_dates]
+    tsll_df = tsll_df.loc[common_dates]
+
     portfolio = []
     tsla_only = []
     tsll_only = []
 
-    for i in range(1, len(tsla_df)):
-        today = tsla_df.iloc[i - 1]
-        tomorrow = tsla_df.iloc[i]
-        tsll_price = tsll_df.loc[tomorrow.name]["Close"]
+    for i in range(1, len(common_dates)):
+        today = common_dates[i - 1]
+        tomorrow = common_dates[i]
+
+        today_data = tsla_df.loc[today]
+        tomorrow_data = tsla_df.loc[tomorrow]
+        tsll_price_today = tsll_df.loc[today]["Close"]
+        tsll_price_tomorrow = tsll_df.loc[tomorrow]["Close"]
 
         if allocation_fn:
-            w_tsla, w_tsll = allocation_fn(today)
+            w_tsla, w_tsll = allocation_fn(today_data)
         else:
-            w_tsla = 1.0
+            w_tsla = 1.0  # 기본: TSLA 100%
             w_tsll = 0.0
 
         total_return = (
-            w_tsla * (tomorrow["Close"] / today["Close"]) +
-            w_tsll * (tsll_price / tsll_df.loc[today.name]["Close"])
+            w_tsla * (tomorrow_data["Close"] / today_data["Close"]) +
+            w_tsll * (tsll_price_tomorrow / tsll_price_today)
         )
 
-        portfolio.append(portfolio[-1] * total_return if portfolio else 100.0)
-        tsla_only.append(tsla_only[-1] * (tomorrow["Close"] / today["Close"]) if tsla_only else 100.0)
-        tsll_only.append(tsll_only[-1] * (tsll_price / tsll_df.loc[today.name]["Close"]) if tsll_only else 100.0)
+        if portfolio:
+            portfolio.append(portfolio[-1] * total_return)
+        else:
+            portfolio.append(100.0)  # 초기 자산 100으로 설정
 
-    dates = tsla_df.index[1:]
-    return pd.Series(portfolio, index=dates), pd.Series(tsla_only, index=dates), pd.Series(tsll_only, index=dates)
+        if tsla_only:
+            tsla_only.append(tsla_only[-1] * (tomorrow_data["Close"] / today_data["Close"]))
+        else:
+            tsla_only.append(100.0)
+
+        if tsll_only:
+            tsll_only.append(tsll_only[-1] * (tsll_price_tomorrow / tsll_price_today))
+        else:
+            tsll_only.append(100.0)
+
+    return (pd.Series(portfolio, index=common_dates[1:]),
+            pd.Series(tsla_only, index=common_dates[1:]),
+            pd.Series(tsll_only, index=common_dates[1:]))
 
 def compute_performance_metrics(equity_curve):
     """
@@ -52,9 +81,13 @@ def compute_performance_metrics(equity_curve):
         "MaxDrawdown": max_dd
     }
 
-def print_performance_table(strategy_curve, tsla_curve, tsll_curve):
+def print_performance_table(strat_metrics, tsla_metrics, tsll_metrics):
     """
     전략 vs TSLA vs TSLL 성과 비교표를 콘솔에 출력합니다.
+    인자:
+        strat_metrics (dict): 전략의 성과 지표 딕셔너리
+        tsla_metrics (dict): TSLA의 성과 지표 딕셔너리
+        tsll_metrics (dict): TSLL의 성과 지표 딕셔너리
     """
     console = Console()
     table = Table(title="Performance Summary: Dynamic Strategy vs TSLA vs TSLL")
@@ -63,10 +96,6 @@ def print_performance_table(strategy_curve, tsla_curve, tsll_curve):
     table.add_column("Dynamic Strategy", justify="right")
     table.add_column("TSLA Only", justify="right")
     table.add_column("TSLL Only", justify="right")
-
-    strat_metrics = compute_performance_metrics(strategy_curve)
-    tsla_metrics = compute_performance_metrics(tsla_curve)
-    tsll_metrics = compute_performance_metrics(tsll_curve)
 
     for key in ["CAGR", "Volatility", "Sharpe", "MaxDrawdown"]:
         table.add_row(
