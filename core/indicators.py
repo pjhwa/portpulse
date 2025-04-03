@@ -75,3 +75,55 @@ def add_technical_indicators(df):
     df['bb_lower'] = lower
     df['atr'] = compute_ATR(df)
     return df
+
+def compute_SMA(series, period):
+    return series.rolling(window=period).mean()
+
+def compute_RSI_variants(df, price_col='adjclose'):
+    df['rsi_daily'] = compute_RSI(df[price_col], 14)
+    df['rsi_weekly'] = compute_RSI(df[price_col].resample('W').mean(), 14)
+    df['rsi_short'] = compute_RSI(df[price_col], 5)
+    return df
+
+def compute_BB_width(df, period=20, num_std=2):
+    upper, lower = compute_Bollinger_Bands(df['adjclose'], period, num_std)
+    return (upper - lower) / df['adjclose'].rolling(window=period).mean()
+
+def compute_MACD_short(series):
+    return compute_MACD(series, short=6, long=13, signal=5)
+
+def compute_volume_change(df):
+    return df['volume'].pct_change()
+
+def compute_stochastic_oscillator(df, k_period=14, d_period=3):
+    low_min = df['low'].rolling(window=k_period).min()
+    high_max = df['high'].rolling(window=k_period).max()
+    k = 100 * (df['close'] - low_min) / (high_max - low_min)
+    d = k.rolling(window=d_period).mean()
+    return k, d
+
+def compute_OBV(df):
+    direction = df['close'].diff().apply(lambda x: 1 if x > 0 else (-1 if x < 0 else 0))
+    return (direction * df['volume']).cumsum()
+
+def compute_VWAP(df):
+    typical_price = (df['high'] + df['low'] + df['close']) / 3
+    return (typical_price * df['volume']).cumsum() / df['volume'].cumsum()
+
+def add_all_indicators(df):
+    df = add_technical_indicators(df)
+    df['sma5'] = compute_SMA(df['adjclose'], 5)
+    df['sma10'] = compute_SMA(df['adjclose'], 10)
+    df['sma50'] = compute_SMA(df['adjclose'], 50)
+    df['sma200'] = compute_SMA(df['adjclose'], 200)
+    df = compute_RSI_variants(df)
+    df['bb_width'] = compute_BB_width(df)
+    macd_short, signal_short, hist_short = compute_MACD_short(df['adjclose'])
+    df['macd_short'] = macd_short
+    df['macd_signal_short'] = signal_short
+    df['macd_hist_short'] = hist_short
+    df['volume_change'] = compute_volume_change(df)
+    df['stoch_k'], df['stoch_d'] = compute_stochastic_oscillator(df)
+    df['obv'] = compute_OBV(df)
+    df['vwap'] = compute_VWAP(df)
+    return df
