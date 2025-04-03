@@ -1,24 +1,21 @@
-# ✅ portpulse.py
+# portpulse.py
 import argparse
 from datetime import datetime
 from core.fetch import fetch_price_data, fetch_vix_data, fetch_fear_greed_index, fetch_interest_rate
-from core.indicators import add_technical_indicators
-from core.signal import decide_allocation, explain_allocation_reason
+from core.indicators import add_all_indicators
+from core.signal import custom_decide_allocation_extended, explain_allocation_reason
 from core.backtest import run_backtest, compute_performance_metrics, print_performance_table
-from core.optimize import run_optimization
+from core.optimize import run_optimization_and_save
+from core.simulation import simulate_with_saved_thresholds, simulate_with_default_thresholds
+from core.portfolio import load_trade_log, get_current_holdings, get_initial_holdings, ensure_database
+from data.thresholds import load_latest_thresholds
 from rich import print
 from rich.table import Table
 from rich.console import Console
 from rich.text import Text
-from core.portfolio import load_trade_log, get_current_holdings, get_initial_holdings
-from core.portfolio import ensure_database
 
-# ✅ 누락 컬럼 보완 함수 포함
 def normalize_adjclose(df):
-    # 열 이름을 소문자로 통일 (fetch_price_data와의 일관성 유지)
     df.columns = [col.lower() for col in df.columns]
-
-    # 'adjclose' 열이 없는 경우 보완
     if "adjclose" not in df.columns:
         if "close" in df.columns:
             df["adjclose"] = df["close"]
@@ -26,11 +23,8 @@ def normalize_adjclose(df):
             df["adjclose"] = df["adj close"]
         else:
             raise ValueError("Cannot find a suitable column to set as 'adjclose'")
-
-    # 'close' 열이 없는 경우 'adjclose'로 보완
     if "close" not in df.columns and "adjclose" in df.columns:
         df["close"] = df["adjclose"]
-
     return df
 
 def analyze_today():
@@ -43,7 +37,6 @@ def analyze_today():
     tsla_df = normalize_adjclose(tsla_df)
     tsll_df = normalize_adjclose(tsll_df)
 
-    # 데이터프레임이 비어 있는지 확인
     if tsla_df.empty:
         print(f"[red]⚠ TSLA 데이터가 비어 있습니다. 분석을 중단합니다.[/red]")
         return
@@ -51,35 +44,23 @@ def analyze_today():
         print(f"[red]⚠ TSLL 데이터가 비어 있습니다. 분석을 중단합니다.[/red]")
         return
 
-    tsla_df = add_technical_indicators(tsla_df)
+    tsla_df = add_all_indicators(tsla_df)
 
     latest_date = tsla_df.index[-1]
     latest = tsla_df.loc[latest_date]
     price = latest['adjclose']
-    rsi = latest['rsi']
-    macd = latest['macd']
-    macd_signal = latest['macd_signal']
-    macd_hist = latest['macd_hist']
-    bb_upper = latest['bb_upper']
-    bb_lower = latest['bb_lower']
-    atr = latest['atr']
-
     vix_data = fetch_vix_data()
     vix = vix_data.get(latest_date, None) if not vix_data.empty else None
     fear_greed = fetch_fear_greed_index()
     interest_rate = fetch_interest_rate()
 
-    w_tsla, w_tsll = decide_allocation(
-        rsi, macd, macd_signal, macd_hist,
-        price, bb_upper, bb_lower, atr,
-        vix=vix, fear_greed=fear_greed, interest_rate=interest_rate
-    )
+    # 임계값 로드 (최적화된 값이 없으면 기본값 사용)
+    thresholds = load_latest_thresholds()
+    if thresholds is None:
+        thresholds = get_default_thresholds()
 
-    explanation = explain_allocation_reason(
-        rsi, macd, macd_signal, macd_hist,
-        price, bb_upper, bb_lower, atr,
-        w_tsla, w_tsll, vix=vix, fear_greed=fear_greed, interest_rate=interest_rate
-    )
+    w_tsla, w_tsll = custom_decide_allocation_extended(latest, thresholds)
+    explanation = explain_allocation_reason(latest, w_tsla, w_tsll, thresholds)
 
     print(f"[bold yellow]📅 분석 기준일: {latest_date.date()}[/bold yellow]\n")
     print(explanation)
@@ -87,8 +68,8 @@ def analyze_today():
     trade_log = load_trade_log()
     current = get_current_holdings(trade_log)
     initial = get_initial_holdings(trade_log)
-    tsla_price = tsla_df.iloc[-1]['adjclose']  # 소문자
-    tsll_price = tsll_df.iloc[-1]['adjclose']  # 소문자
+    tsla_price = tsla_df.iloc[-1]['adjclose']
+    tsll_price = tsll_df.iloc[-1]['adjclose']
 
     print("\n[bold green]📊 현재 포트폴리오 분석[/bold green]")
 
@@ -167,47 +148,38 @@ def analyze_today():
         print(f"TSLA {delta_tsla / tsla_price:.0f}주 매수 권장")
 
 def run_backtest_mode():
-    print("\n[bold cyan]📈 백테스트 모드 실행 중...[/bold cyan]\n")
-    tsla_df, tsll_df = fetch_price_data()
-    tsla_df = normalize_adjclose(tsla_df)  # TSLA 데이터프레임 정규화
-    tsll_df = normalize_adjclose(tsll_df)  # TSLL 데이터프레임 정규화
-    tsla_df = add_technical_indicators(tsla_df)
+    run_optimization_and_save(metric="sharpe")
 
-    def allocation_fn(today):
-        return decide_allocation(
-            today['rsi'], today['macd'], today['macd_signal'], today['macd_hist'],  # 소문자로 변경
-            today['adjclose'], today['bb_upper'], today['bb_lower'], today['atr']  # 소문자 유지
+def run_simulation_mode(start, end, thresholds):
+    console = Console()
+    console.print(f"\n[bold cyan]🧪 시뮬레이션 모드 실행 중: {start} ~ {end}, 임계값: {thresholds}[/bold cyan]\n")
+    strat_opt, perf_opt = simulate_with_saved_thresholds(start, end)
+    strat_def, perf_def = simulate_with_default_thresholds(start, end)
+
+    table = Table(title="Simulation Summary: Optimized vs Default")
+    table.add_column("Metric")
+    table.add_column("Optimized", justify="right")
+    table.add_column("Default", justify="right")
+
+    for key in ["Final Value", "CAGR", "Sharpe", "MaxDrawdown"]:
+        table.add_row(
+            key,
+            f"{perf_opt[key]:.2f}" if isinstance(perf_opt[key], float) else str(perf_opt[key]),
+            f"{perf_def[key]:.2f}" if isinstance(perf_def[key], float) else str(perf_def[key])
         )
+    console.print(table)
 
-    # 백테스트 실행
-    strategy_vals, tsla_vals, tsll_vals = run_backtest(tsla_df, tsll_df, allocation_fn=allocation_fn)
-
-    # 성과 지표 계산
-    strat_metrics = compute_performance_metrics(strategy_vals)
-    tsla_metrics = compute_performance_metrics(tsla_vals)
-    tsll_metrics = compute_performance_metrics(tsll_vals)
-
-    # 결과 출력
-    print_performance_table(strat_metrics, tsla_metrics, tsll_metrics)
-
-def run_simulation_mode(start, end):
-    print(f"\n[bold cyan]🧪 시뮬레이션 모드 실행 중: {start} ~ {end}[/bold cyan]\n")
-    tsla_df, tsll_df = fetch_price_data(start=start, end=end)
-    tsla_df = normalize_adjclose(tsla_df)
-    tsla_df = add_technical_indicators(tsla_df)
-    strategy_vals, tsla_vals, tsll_vals = run_backtest(tsla_df, tsll_df)
-    strat_metrics = compute_performance_metrics(strategy_vals)
-    tsla_metrics = compute_performance_metrics(tsla_vals)
-    tsll_metrics = compute_performance_metrics(tsll_vals)
-    print_performance_table(strat_metrics, tsla_metrics, tsll_metrics)
-
+    initial_value = 100.0
+    opt_return = (perf_opt['Final Value'] / initial_value - 1) * 100
+    def_return = (perf_def['Final Value'] / initial_value - 1) * 100
+    print(f"\n[bold green]Optimized 수익률: {opt_return:.2f}%[/bold green]")
+    print(f"[bold yellow]Default 수익률: {def_return:.2f}%[/bold yellow]")
 
 def main():
     ensure_database("portpulse.db")
     parser = argparse.ArgumentParser(description="PortPulse 포트폴리오 전략 분석 도구")
     parser.add_argument("--backtest", action="store_true", help="백테스트 실행")
-    parser.add_argument("--simulate", nargs=2, metavar=("START_DATE", "END_DATE"),
-                        help="시뮬레이션 실행 (예: --simulate 2023-01-01 2024-01-01)")
+    parser.add_argument("--simulate", nargs=2, metavar=("START_DATE", "END_DATE"), help="시뮬레이션 실행 (YYYY-MM-DD 형식)")
     parser.add_argument("--optimize", action="store_true", help="자동 최적화 실행")
     parser.add_argument("--metric", type=str, default="sharpe", help="최적화 기준 (sharpe, cagr, mdd)")
     args = parser.parse_args()
@@ -216,16 +188,22 @@ def main():
         run_backtest_mode()
     elif args.simulate:
         try:
+            # 날짜 형식 변환
             start_date = datetime.strptime(args.simulate[0], "%Y-%m-%d").date()
             end_date = datetime.strptime(args.simulate[1], "%Y-%m-%d").date()
-            run_simulation_mode(start_date, end_date)
-        except Exception:
+            # 최신 임계값 로드, 없으면 기본값 사용
+            thresholds = load_latest_thresholds()
+            if thresholds is None:
+                print("[yellow]⚠ 최적화된 임계값이 없습니다. 기본값을 사용합니다.[/yellow]")
+                thresholds = get_default_thresholds()
+            # 시뮬레이션 실행
+            run_simulation_mode(start_date, end_date, thresholds)
+        except ValueError:
             print("[red]날짜 형식이 올바르지 않습니다. YYYY-MM-DD 형식으로 입력하세요.[/red]")
     elif args.optimize:
-        run_optimization(metric=args.metric)
+        run_optimization_and_save(metric=args.metric)
     else:
         analyze_today()
-
 
 if __name__ == "__main__":
     main()
