@@ -175,8 +175,8 @@ def run_backtest_mode():
 
     def allocation_fn(today):
         return decide_allocation(
-            today['RSI'], today['MACD'], today['MACD_signal'], today['MACD_hist'],
-            today['AdjClose'], today['BB_upper'], today['BB_lower'], today['ATR']
+            today['rsi'], today['macd'], today['macd_signal'], today['macd_hist'],  # 소문자로 변경
+            today['adjclose'], today['bb_upper'], today['bb_lower'], today['atr']  # 소문자 유지
         )
 
     # 백테스트 실행
