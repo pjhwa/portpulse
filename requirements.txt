@@ -6,3 +6,5 @@ fpdf
 requests
 schedule
 rich
+scikit-optimize
+tqdm
