@@ -44,7 +44,7 @@ def compute_ATR(df, period=14):
     평균 진폭(ATR)을 계산합니다.
 
     Parameters:
-    - df: 시세 데이터프레임 (High, Low, Close 포함)
+    - df: 시세 데이터프레임 (high, low, close 포함)
     - period: 계산 기간 (기본값: 14)
 
     Returns:
@@ -60,17 +60,18 @@ def compute_ATR(df, period=14):
 def add_technical_indicators(df):
     df = df.copy()
 
-    # 👉 ATR 계산을 위한 Close 컬럼 보완
-    if "Close" not in df.columns and "AdjClose" in df.columns:
-        df["Close"] = df["AdjClose"]
+    # ATR 계산을 위한 'close' 열 보완
+    if "close" not in df.columns and "adjclose" in df.columns:
+        df["close"] = df["adjclose"]
 
-    df['RSI'] = compute_RSI(df['AdjClose'])
-    macd, signal, hist = compute_MACD(df['AdjClose'])
-    df['MACD'] = macd
-    df['MACD_signal'] = signal
-    df['MACD_hist'] = hist
-    upper, lower = compute_Bollinger_Bands(df['AdjClose'])
-    df['BB_upper'] = upper
-    df['BB_lower'] = lower
-    df['ATR'] = compute_ATR(df)
+    # 소문자 열 이름 사용
+    df['rsi'] = compute_RSI(df['adjclose'])
+    macd, signal, hist = compute_MACD(df['adjclose'])
+    df['macd'] = macd
+    df['macd_signal'] = signal
+    df['macd_hist'] = hist
+    upper, lower = compute_Bollinger_Bands(df['adjclose'])
+    df['bb_upper'] = upper
+    df['bb_lower'] = lower
+    df['atr'] = compute_ATR(df)
     return df
