@@ -1,4 +1,4 @@
-# ✅ portpulse.py 수정
+# ✅ portpulse.py
 import argparse
 from datetime import datetime
 from core.fetch import fetch_price_data, fetch_vix_data, fetch_fear_greed_index, fetch_interest_rate
@@ -151,7 +151,8 @@ def analyze_today():
 def run_backtest_mode():
     print("\n[bold cyan]📈 백테스트 모드 실행 중...[/bold cyan]\n")
     tsla_df, tsll_df = fetch_price_data()
-    tsla_df = normalize_adjclose(tsla_df)
+    tsla_df = normalize_adjclose(tsla_df)  # TSLA 데이터프레임 정규화
+    tsll_df = normalize_adjclose(tsll_df)  # TSLL 데이터프레임 정규화
     tsla_df = add_technical_indicators(tsla_df)
 
     def allocation_fn(today):
