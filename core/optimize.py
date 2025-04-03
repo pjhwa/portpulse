@@ -1,132 +1,131 @@
 # core/optimize.py
 import itertools
 import pandas as pd
-import matplotlib.pyplot as plt
-from core.fetch import fetch_price_data, fetch_vix_data
-from core.indicators import add_technical_indicators
-from core.backtest import run_backtest, compute_performance_metrics, print_performance_table
-from core.signal import decide_allocation
+import numpy as np
+from tqdm import tqdm
+from datetime import datetime
+from core.fetch import fetch_price_data, fetch_vix_data, fetch_fear_greed_index
+from core.indicators import add_all_indicators
+from core.backtest import run_backtest, compute_performance_metrics
+from core.signal import custom_decide_allocation_extended
+from data.thresholds import save_best_thresholds, get_default_thresholds
 from rich import print
 
-# 유연한 평가 기준 지원: Sharpe, CAGR, MDD
+def run_optimization_and_save(metric="sharpe", optimization_method="grid"):
+    """
+    백테스트 기반으로 임계값을 최적화하고 결과를 저장하는 함수
 
-# 튜닝 가능한 할당 함수
+    Parameters:
+    - metric (str): 최적화 기준 지표 ("sharpe", "cagr", "mdd" 등)
+    - optimization_method (str): 최적화 방법 ("grid" 또는 "bayesian")
+    """
+    print("\n[bold cyan]🧠 백테스트 기반 임계값 최적화 실행 중...[/bold cyan]")
 
-def custom_decide_allocation(rsi, macd, macd_signal, macd_hist, price, bb_upper, bb_lower, atr,
-                             rsi_low, rsi_high, atr_low, atr_high, use_bb=True, vix=None):
-    score = 0
-    if rsi is not None:
-        if rsi <= rsi_low:
-            score += 1
-        elif rsi >= rsi_high:
-            score -= 1
-    if macd is not None and macd_signal is not None:
-        if macd > macd_signal:
-            score += 1
-        else:
-            score -= 1
-    if use_bb and price is not None and bb_upper is not None and bb_lower is not None:
-        if price < bb_lower:
-            score += 1
-        elif price > bb_upper:
-            score -= 1
-    if atr is not None and price is not None:
-        atr_pct = (atr / price) * 100
-        if atr_pct < atr_low:
-            score += 1
-        elif atr_pct > atr_high:
-            score -= 1
-    if vix is not None:
-        if vix > 25:
-            score -= 1
-        elif vix < 15:
-            score += 1
-    w_tsll = max(0.0, min(score / 5, 1.0)) if score > 0 else 0.0
-    w_tsla = 1.0 - w_tsll
-    return w_tsla, w_tsll
-
-
-def run_optimization(metric="sharpe"):
-    print("\n[bold cyan]🧠 자동 튜닝 최적화 실행 중...[/bold cyan]")
+    # 데이터 로드
     tsla_df, tsll_df = fetch_price_data()
-    tsla_df = add_technical_indicators(tsla_df)
+    tsla_df = add_all_indicators(tsla_df)
     vix_df = fetch_vix_data()
+    fear_greed = fetch_fear_greed_index()
 
-    # ⬆ 2단계: 확장된 튜닝 범위
-    rsi_lows = [20, 25, 30, 35, 40]
-    rsi_highs = [60, 65, 70, 75, 80]
-    atr_lows = [1.0, 1.5, 2.0, 2.5, 3.0]
-    atr_highs = [4.0, 5.0, 6.0, 7.0, 8.0]
-    bb_flags = [True, False]
+    # 임계값 범위 설정 (Grid Search용)
+    rsi_daily_lows = [20, 25, 30, 35]
+    rsi_daily_highs = [60, 65, 70, 75]
+    atr_lows = [1.0, 1.5, 2.0]
+    atr_highs = [4.0, 5.0, 6.0]
+    bb_width_lows = [0.03, 0.05, 0.07]
+    bb_width_highs = [0.10, 0.15, 0.20]
+
+    # 검색 공간 생성
+    search_space = list(itertools.product(rsi_daily_lows, rsi_daily_highs, atr_lows, atr_highs, bb_width_lows, bb_width_highs))
 
     best_config = None
     best_value = float('-inf')
-    best_results = None
-    best_curve = None
+    best_metrics = None
 
-    for (rsi_lo, rsi_hi, atr_lo, atr_hi, use_bb) in itertools.product(rsi_lows, rsi_highs, atr_lows, atr_highs, bb_flags):
-        if rsi_lo >= rsi_hi or atr_lo >= atr_hi:
-            continue
+    # Grid Search 실행
+    default_thresholds = get_default_thresholds()  # Load default thresholds
+    for params in tqdm(search_space, desc="Grid Search 진행 중"):
+        rsi_lo, rsi_hi, atr_lo, atr_hi, bb_lo, bb_hi = params
+        thresholds = default_thresholds.copy()  # Start with default thresholds
+        thresholds.update({
+            'rsi_daily_low': rsi_lo,
+            'rsi_daily_high': rsi_hi,
+            'atr_low': atr_lo,
+            'atr_high': atr_hi,
+            'bb_width_low': bb_lo,
+            'bb_width_high': bb_hi,
+        })
 
-        def alt_decider(rsi, macd, macd_signal, macd_hist, price, bb_upper, bb_lower, atr, date=None):
-            vix_val = vix_df.loc[date] if date in vix_df.index else None
-            return custom_decide_allocation(rsi, macd, macd_signal, macd_hist, price, bb_upper, bb_lower, atr,
-                                            rsi_lo, rsi_hi, atr_lo, atr_hi, use_bb, vix=vix_val)
+        def allocation_fn(today):
+            today = today.copy()  # Create a copy to avoid SettingWithCopyWarning
+            vix_val = vix_df.get(today.name, None)
+            fear_greed_val = fear_greed.get(today.name, None)
+            today['fear_greed'] = fear_greed_val
+            return custom_decide_allocation_extended(today, thresholds)
 
-        strat_vals, tsla_vals, tsll_vals = run_backtest(tsla_df, tsll_df, allocation_fn=alt_decider)
+        strat_vals, _, _ = run_backtest(tsla_df, tsll_df, allocation_fn=allocation_fn)
         metrics = compute_performance_metrics(strat_vals)
 
-        metric_val = {
+        # 선택된 메트릭에 따라 점수 계산
+        score = {
             "sharpe": metrics["Sharpe"],
             "cagr": metrics["CAGR"],
             "mdd": -metrics["MaxDrawdown"]
-        }.get(metric.lower(), metrics["Sharpe"])
+        }.get(metric, metrics["Sharpe"])
 
-        if metric_val is not None and metric_val > best_value:
-            best_value = metric_val
-            best_config = {
-                'RSI_low': rsi_lo, 'RSI_high': rsi_hi,
-                'ATR_low': atr_lo, 'ATR_high': atr_hi,
-                'Use_Bollinger': use_bb
-            }
-            best_results = (metrics, compute_performance_metrics(tsla_vals), compute_performance_metrics(tsll_vals))
-            best_curve = strat_vals
+        if score > best_value:
+            best_value = score
+            best_config = thresholds.copy()
+            best_config.update({"metric": metric, "score": score})
+            best_metrics = metrics
 
-    print("\n[bold green]✅ 최적화 완료![/bold green]")
-    print(f"[bold]최고 성과 조건 (metric = {metric.upper()}):[/bold]")
-    for k, v in best_config.items():
-        print(f" - {k}: {v}")
+    # 최적화 결과 출력 및 저장
+    if best_config:
+        print("\n[bold green]✅ 최적화 완료![/bold green]")
+        for k, v in best_config.items():
+            print(f" - {k}: {v}")
+        save_best_thresholds(best_config)
+    else:
+        print("[red]❌ 최적화 실패: 유효한 설정을 찾지 못했습니다.[/red]")
 
-    print("\n[bold]최종 전략 성능:[/bold]")
-    print_performance_table(*best_results)
+# Bayesian Optimization 예시 (선택적)
+from skopt import gp_minimize
 
-    pd.Series(best_curve).to_csv("best_equity_curve.csv")
-    summary_df = pd.DataFrame([{
-        **best_config,
-        **best_results[0],
-        "OptimizeMetric": metric,
-        "BestValue": best_value
-    }])
-    summary_df.to_csv("best_strategy_summary.csv", index=False)
+def bayesian_optimize(metric="sharpe"):
+    """
+    Bayesian Optimization을 사용한 임계값 최적화 함수
 
-    plt.figure(figsize=(10, 5))
-    plt.plot(best_curve.index, best_curve.values, label="Optimized Strategy", linewidth=2)
-    plt.title("Best Strategy Equity Curve")
-    plt.xlabel("Date")
-    plt.ylabel("Portfolio Value")
-    plt.grid(True)
-    plt.legend()
-    plt.tight_layout()
-    plt.savefig("equity_curve.png")
-    pd.Series(tsla_vals).to_csv("best_tsla_curve.csv")
-    pd.Series(tsll_vals).to_csv("best_tsll_curve.csv")
+    Parameters:
+    - metric (str): 최적화 기준 지표
 
-    import yfinance as yf
-    start, end = tsla_df.index[0], tsla_df.index[-1]
-    spy = yf.Ticker("SPY").history(start=start, end=end)['Close']
-    qqq = yf.Ticker("QQQ").history(start=start, end=end)['Close']
-    spy = spy / spy.iloc[0] * 100
-    qqq = qqq / qqq.iloc[0] * 100
-    spy.to_csv("best_spy_curve.csv")
-    qqq.to_csv("best_qq_curve.csv")
-    print("\n📁 결과 저장됨: best_strategy_summary.csv, equity_curve.png")
+    Returns:
+    - dict: 최적화된 임계값
+    """
+    def objective(params):
+        thresholds = {
+            'rsi_daily_low': params[0],
+            'rsi_daily_high': params[1],
+            'atr_low': params[2],
+            'atr_high': params[3],
+            'bb_width_low': params[4],
+            'bb_width_high': params[5],
+        }
+        strat_vals, _, _ = run_backtest(tsla_df, tsll_df, lambda x: custom_decide_allocation_extended(x, thresholds))
+        metrics = compute_performance_metrics(strat_vals)
+        return -metrics[metric]  # 최소화 문제로 변환
+
+    # 검색 공간 정의
+    space = [(20, 35), (60, 75), (1.0, 2.0), (4.0, 6.0), (0.03, 0.07), (0.10, 0.20)]
+    res = gp_minimize(objective, space, n_calls=50)
+    best_thresholds = {
+        'rsi_daily_low': res.x[0],
+        'rsi_daily_high': res.x[1],
+        'atr_low': res.x[2],
+        'atr_high': res.x[3],
+        'bb_width_low': res.x[4],
+        'bb_width_high': res.x[5],
+    }
+    return best_thresholds
+
+if __name__ == "__main__":
+    run_optimization_and_save(metric="sharpe", optimization_method="grid")
