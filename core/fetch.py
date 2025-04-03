@@ -2,10 +2,10 @@
 import yfinance as yf
 import pandas as pd
 import requests
-from data.db import load_prices, save_prices, init_db
+from data.db import load_prices, save_prices, ensure_db
 
 # DB 초기화 (최초 1회 실행)
-init_db()
+ensure_db()
 
 def fetch_price_data(start="2022-07-01", end=None):
     # 먼저 DB에서 조회
@@ -15,12 +15,22 @@ def fetch_price_data(start="2022-07-01", end=None):
     # 존재하지 않으면 API 호출 후 저장
     if tsla is None:
         tsla = yf.Ticker("TSLA").history(start=start, end=end, auto_adjust=True)
-        tsla.rename(columns={"Close": "AdjClose"}, inplace=True)
         save_prices(tsla, "TSLA")
     if tsll is None:
         tsll = yf.Ticker("TSLL").history(start=start, end=end, auto_adjust=True)
-        tsll.rename(columns={"Close": "AdjClose"}, inplace=True)
         save_prices(tsll, "TSLL")
+
+    # ✅ 열 이름 표준화 적용
+    rename_map = {
+        'Open': 'open', 'High': 'high', 'Low': 'low',
+        'Close': 'close', 'Adj Close': 'adjclose', 'Volume': 'volume'
+    }
+    tsla = tsla.rename(columns={k: v for k, v in rename_map.items() if k in tsla.columns})
+    tsll = tsll.rename(columns={k: v for k, v in rename_map.items() if k in tsll.columns})
+
+    for df in [tsla, tsll]:
+        df.index = pd.to_datetime(df.index)
+        df.index.name = 'Date'
 
     return tsla, tsll
 
