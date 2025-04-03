@@ -1,84 +1,116 @@
-# core/fetch.py
-import yfinance as yf
+# data/db.py
+import os
+import sqlite3
 import pandas as pd
-import requests
-from data.db import load_prices, save_prices, ensure_db
+from datetime import datetime
 from rich import print
+from rich.text import Text
 
-ensure_db()
+def ensure_db(path="portpulse.db"):
+    if not os.path.exists(path):
+        print(f"[yellow]⚠ 데이터베이스가 존재하지 않습니다. 새로 생성합니다: {path}[/yellow]")
+        conn = sqlite3.connect(path)
+        with conn:
+            conn.execute("""
+            CREATE TABLE IF NOT EXISTS prices (
+                date TEXT,
+                ticker TEXT,
+                open REAL,
+                high REAL,
+                low REAL,
+                close REAL,
+                adjclose REAL,
+                volume INTEGER,
+                PRIMARY KEY (date, ticker)
+            )
+            """)
+        conn.close()
 
-def fetch_price_data(start="2023-03-01", end=None):
-    ensure_db()
-    tsla = load_prices("TSLA", start)
-    tsll = load_prices("TSLL", start)
+def save_prices(df: pd.DataFrame, ticker: str, db_path="portpulse.db"):
+    ensure_db(db_path)
 
-    if tsla is None:
-        try:
-            tsla = yf.Ticker("TSLA").history(start=start, end=end, auto_adjust=True)
-            if tsla.empty or tsla['Close'].isna().all():
-                print(f"[red]⚠ TSLA 데이터 로드 실패: 데이터가 비어 있거나 모두 NaN입니다.[/red]")
-                raise ValueError("TSLA 데이터가 유효하지 않습니다.")
-            #print(f"[debug] TSLA yfinance 데이터: {tsla.tail(1)}")
-            save_prices(tsla, "TSLA")
-        except Exception as e:
-            print(f"[red]⚠ TSLA 데이터 가져오기 오류: {e}[/red]")
-            raise RuntimeError(f"TSLA 데이터를 가져올 수 없습니다: {e}")
+    if df.empty:
+        print(f"[red]⚠ {ticker} 데이터프레임이 비어 있습니다. 저장을 중단합니다.[/red]")
+        return
 
-    if tsll is None:
-        try:
-            tsll = yf.Ticker("TSLL").history(start=start, end=end, auto_adjust=True)
-            if tsll.empty or tsll['Close'].isna().all():
-                print(f"[red]⚠ TSLL 데이터 로드 실패: 데이터가 비어 있거나 모두 NaN입니다.[/red]")
-                raise ValueError("TSLL 데이터가 유효하지 않습니다.")
-            #print(f"[debug] TSLL yfinance 데이터: {tsll.tail(1)}")
-            save_prices(tsll, "TSLL")
-        except Exception as e:
-            print(f"[red]⚠ TSLL 데이터 가져오기 오류: {e}[/red]")
-            raise RuntimeError(f"TSLL 데이터를 가져올 수 없습니다: {e}")
+    # 입력 데이터프레임 디버깅 출력
+    #print(f"[debug] {ticker} 입력 데이터프레임: {df.tail(1)}")
 
-    # 열 이름 표준화 및 중복 인덱스 제거
-    for df in [tsla, tsll]:
-        # yfinance 데이터의 열 이름을 소문자로 변환
-        df.columns = [col.lower() for col in df.columns]
-        if 'close' not in df.columns:
-            print(f"[yellow]⚠ {df.name if hasattr(df, 'name') else 'DataFrame'}에 'close' 열이 없습니다. 열: {df.columns.tolist()}[/yellow]")
-            raise ValueError("'close' 열이 없는 데이터프레임")
-        df.index = pd.to_datetime(df.index)
-        df.index.name = 'date'
-        if df.index.duplicated().any():
-            print(f"[yellow]⚠ {df.name if hasattr(df, 'name') else 'DataFrame'}에서 중복 인덱스 발견. 중복 제거합니다.[/yellow]")
-            df = df[~df.index.duplicated(keep='last')]
+    # 데이터프레임 복사 후 열 이름 소문자 변환
+    df = df.copy()
+    df.columns = [col.lower() for col in df.columns]
 
-    return tsla, tsll
+    # 필수 열 확인 및 보완 (기존 값 보존)
+    required = ['open', 'high', 'low', 'close', 'adjclose', 'volume']
+    for col in required:
+        if col not in df.columns:
+            if col == 'adjclose' and 'close' in df.columns:
+                df['adjclose'] = df['close']
+            elif col == 'close' and 'adjclose' in df.columns:
+                df['close'] = df['adjclose']
+            else:
+                df[col] = 0.0
 
-def fetch_vix_data():
+    # 데이터 유효성 확인
+    if df['close'].isna().all() or df['close'].eq(0).all():
+        print(f"[red]⚠ 경고: {ticker}의 'close' 값이 모두 NaN 또는 0입니다. 저장을 중단합니다.[/red]")
+        #print(f"[debug] {ticker} 처리 후 데이터프레임: {df.tail(5)}")
+        return
+
+    #print(f"[green]✔ {ticker} 저장 완료[/green]")
+
+    # 인덱스를 'date' 열로 변환
+    df = df.reset_index()
+    if 'date' not in df.columns:
+        if 'Date' in df.columns:
+            df = df.rename(columns={'Date': 'date'})
+        elif 'index' in df.columns:
+            df = df.rename(columns={'index': 'date'})
+        else:
+            print(f"[red]⚠ {ticker} 데이터프레임에 날짜 열이 없습니다: {df.columns.tolist()}[/red]")
+            return
+
+    df['date'] = pd.to_datetime(df['date']).dt.strftime("%Y-%m-%d")
+    df['ticker'] = ticker
+    df = df[['date', 'ticker'] + required]
+
+    # SQLite 연결
+    conn = sqlite3.connect(db_path)
+    cursor = conn.cursor()
+    for _, row in df.iterrows():
+        cursor.execute("""
+            INSERT OR REPLACE INTO prices (date, ticker, open, high, low, close, adjclose, volume)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        """, (
+            row['date'], row['ticker'], row['open'], row['high'], row['low'],
+            row['close'], row['adjclose'], row['volume']
+        ))
+    conn.commit()
+    conn.close()
+    #print(f"[debug] {ticker} 데이터 저장 후 확인: {df.tail(1)}")
+
+def load_prices(ticker: str, start: str = "2022-07-01", db_path="portpulse.db"):
+    ensure_db(db_path)
     try:
-        vix = yf.Ticker("^VIX").history(period="6mo")
-        if vix.empty:
-            print(f"[red]⚠ VIX 데이터 로드 실패: 데이터가 비어 있습니다.[/red]")
-            return pd.Series()
-        vix.columns = [col.lower() for col in vix.columns]
-        vix_data = vix['close']
-        return vix_data
+        conn = sqlite3.connect(db_path)
+        query = f"SELECT * FROM prices WHERE ticker = ? AND date >= ?"
+        df = pd.read_sql(query, conn, params=(ticker, start))
+        conn.close()
+
+        if df.empty:
+            #print(f"[yellow]⚠ {ticker} 데이터가 데이터베이스에 없습니다. 기간: {start} 이후[/yellow]")
+            return None
+
+        df['date'] = pd.to_datetime(df['date'])
+        df = df.sort_values("date")
+        df.set_index('date', inplace=True)
+
+        if df['close'].isna().all() or df['close'].eq(0).all():
+            print(f"[red]⚠ {ticker} 데이터가 유효하지 않습니다 (모두 0/NaN).[/red]")
+            #print(f"[debug] {ticker} 로드된 데이터: {df.tail(5)}")
+            return None
+
+        return df
     except Exception as e:
-        print(f"[red]⚠ VIX 데이터 가져오기 오류: {e}[/red]")
-        return pd.Series()
-
-def fetch_fear_greed_index():
-    try:
-        res = requests.get("https://api.alternative.me/fng/?limit=1&format=json")
-        val = int(res.json()['data'][0]['value'])
-        return val
-    except:
+        print(f"[red]데이터 로드 오류: {e}[/red]")
         return None
-
-def fetch_interest_rate():
-    try:
-        fed = yf.download("^TNX", period="7d", interval="1d", progress=False, auto_adjust=False)
-        if 'close' in fed.columns and not fed.empty:
-            fed.columns = [col.lower() for col in fed.columns]
-            return fed['close'].iloc[-1] / 10
-        return 4.0
-    except Exception as e:
-        print(f"[red]⚠ 금리 데이터 가져오기 오류: {e}[/red]")
-        return 4.0
