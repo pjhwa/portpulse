@@ -1,4 +1,4 @@
-# indicators.py
+# core/indicators.py
 import pandas as pd
 
 def compute_RSI(series, period=14):
@@ -6,7 +6,7 @@ def compute_RSI(series, period=14):
     상대강도지수(RSI)를 계산합니다.
 
     Parameters:
-    - series: 가격 시계열 (종가 또는 조정 종가)
+    - series: 주가 시계열 (종가 또는 조정 종가)
     - period: 계산 기간 (기본값: 14)
 
     Returns:
