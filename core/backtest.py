@@ -31,8 +31,8 @@ def run_backtest(tsla_df, tsll_df, allocation_fn=None):
 
         today_data = tsla_df.loc[today]
         tomorrow_data = tsla_df.loc[tomorrow]
-        tsll_price_today = tsll_df.loc[today]["Close"]
-        tsll_price_tomorrow = tsll_df.loc[tomorrow]["Close"]
+        tsll_price_today = tsll_df.loc[today]["close"]  # 소문자 'close'로 변경
+        tsll_price_tomorrow = tsll_df.loc[tomorrow]["close"]  # 소문자 'close'로 변경
 
         if allocation_fn:
             w_tsla, w_tsll = allocation_fn(today_data)
@@ -41,7 +41,7 @@ def run_backtest(tsla_df, tsll_df, allocation_fn=None):
             w_tsll = 0.0
 
         total_return = (
-            w_tsla * (tomorrow_data["Close"] / today_data["Close"]) +
+            w_tsla * (tomorrow_data["close"] / today_data["close"]) +  # 소문자 'close'로 변경
             w_tsll * (tsll_price_tomorrow / tsll_price_today)
         )
 
@@ -51,7 +51,7 @@ def run_backtest(tsla_df, tsll_df, allocation_fn=None):
             portfolio.append(100.0)  # 초기 자산 100으로 설정
 
         if tsla_only:
-            tsla_only.append(tsla_only[-1] * (tomorrow_data["Close"] / today_data["Close"]))
+            tsla_only.append(tsla_only[-1] * (tomorrow_data["close"] / today_data["close"]))  # 소문자 'close'로 변경
         else:
             tsla_only.append(100.0)
 
