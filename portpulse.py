@@ -15,39 +15,57 @@ from core.portfolio import ensure_database
 
 # ✅ 누락 컬럼 보완 함수 포함
 def normalize_adjclose(df):
-    if "AdjClose" not in df.columns:
-        if "Adj Close" in df.columns:
-            df["AdjClose"] = df["Adj Close"]
-        elif "close" in df.columns:
-            df["AdjClose"] = df["close"]
-        elif "Close" in df.columns:
-            df["AdjClose"] = df["Close"]
-    if "Close" not in df.columns and "AdjClose" in df.columns:
-        df["Close"] = df["AdjClose"]
+    # 열 이름을 소문자로 통일 (fetch_price_data와의 일관성 유지)
+    df.columns = [col.lower() for col in df.columns]
+
+    # 'adjclose' 열이 없는 경우 보완
+    if "adjclose" not in df.columns:
+        if "close" in df.columns:
+            df["adjclose"] = df["close"]
+        elif "adj close" in df.columns:
+            df["adjclose"] = df["adj close"]
+        else:
+            raise ValueError("Cannot find a suitable column to set as 'adjclose'")
+
+    # 'close' 열이 없는 경우 'adjclose'로 보완
+    if "close" not in df.columns and "adjclose" in df.columns:
+        df["close"] = df["adjclose"]
+
     return df
 
 def analyze_today():
     console = Console()
     print("\n[bold cyan]📊 오늘의 시장 지표 및 기술 지표 기반 분석[/bold cyan]\n")
     tsla_df, tsll_df = fetch_price_data()
+    tsla_df = tsla_df.rename(columns=str.lower)
+    tsll_df = tsll_df.rename(columns=str.lower)
 
     tsla_df = normalize_adjclose(tsla_df)
-    tsla_df = add_technical_indicators(tsla_df)
     tsll_df = normalize_adjclose(tsll_df)
+
+    # 데이터프레임이 비어 있는지 확인
+    if tsla_df.empty:
+        print(f"[red]⚠ TSLA 데이터가 비어 있습니다. 분석을 중단합니다.[/red]")
+        return
+    if tsll_df.empty:
+        print(f"[red]⚠ TSLL 데이터가 비어 있습니다. 분석을 중단합니다.[/red]")
+        return
+
+    tsla_df = add_technical_indicators(tsla_df)
 
     latest_date = tsla_df.index[-1]
     latest = tsla_df.loc[latest_date]
-    price = latest['AdjClose']
-    rsi = latest['RSI']
-    macd = latest['MACD']
-    macd_signal = latest['MACD_signal']
-    macd_hist = latest['MACD_hist']
-    bb_upper = latest['BB_upper']
-    bb_lower = latest['BB_lower']
-    atr = latest['ATR']
+    price = latest['adjclose']
+    rsi = latest['rsi']
+    macd = latest['macd']
+    macd_signal = latest['macd_signal']
+    macd_hist = latest['macd_hist']
+    bb_upper = latest['bb_upper']
+    bb_lower = latest['bb_lower']
+    atr = latest['atr']
 
     vix_data = fetch_vix_data()
-    vix = vix_data.get(latest_date, None)
+    vix = vix_data.get(latest_date, None) if not vix_data.empty else None
     fear_greed = fetch_fear_greed_index()
     interest_rate = fetch_interest_rate()
 
@@ -69,8 +87,8 @@ def analyze_today():
     trade_log = load_trade_log()
     current = get_current_holdings(trade_log)
     initial = get_initial_holdings(trade_log)
-    tsla_price = tsla_df.iloc[-1]['AdjClose']
-    tsll_price = tsll_df.iloc[-1]['AdjClose']
+    tsla_price = tsla_df.iloc[-1]['adjclose']  # 소문자
+    tsll_price = tsll_df.iloc[-1]['adjclose']  # 소문자
 
     print("\n[bold green]📊 현재 포트폴리오 분석[/bold green]")
 
