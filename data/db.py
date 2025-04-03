@@ -1,67 +1,92 @@
-# db.py
+# ✅ data/db.py 수정: 누락된 컬럼 보완 후 저장하도록 개선
+import os
 import sqlite3
 import pandas as pd
 from datetime import datetime
+from rich import print
+from rich.text import Text
 
-DB_FILE = "portpulse.db"
+def ensure_db(path="portpulse.db"):
+    if not os.path.exists(path):
+        print(f"[yellow]⚠ 데이터베이스가 존재하지 않습니다. 새로 생성합니다: {path}[/yellow]")
+        conn = sqlite3.connect(path)
+        with conn:
+            conn.execute("""
+            CREATE TABLE IF NOT EXISTS prices (
+                date TEXT,
+                ticker TEXT,
+                open REAL,
+                high REAL,
+                low REAL,
+                close REAL,
+                adjclose REAL,
+                volume INTEGER
+            )
+            """)
+        conn.close()
 
-def init_db():
-    conn = sqlite3.connect(DB_FILE, check_same_thread=False)
-    cursor = conn.cursor()
-    cursor.execute('''
-        CREATE TABLE IF NOT EXISTS prices (
-            date TEXT,
-            ticker TEXT,
-            open REAL,
-            high REAL,
-            low REAL,
-            close REAL,
-            adjclose REAL,
-            volume INTEGER
-        )
-    ''')
-    conn.commit()
-    conn.close()
+def save_prices(df: pd.DataFrame, ticker: str, db_path="portpulse.db"):
+    ensure_db(db_path)
 
-def save_prices(df, ticker):
-    from data.db import DB_FILE
+    # ✅ 열 이름 표준화
+    rename_map = {
+        'Open': 'open', 'High': 'high', 'Low': 'low',
+        'Close': 'close', 'Adj Close': 'adjclose', 'Volume': 'volume'
+    }
+    df = df.rename(columns={k: v for k, v in rename_map.items() if k in df.columns})
 
-    conn = sqlite3.connect(DB_FILE, check_same_thread=False)
-    df = df.copy()
+    required = ['open', 'high', 'low', 'close', 'adjclose', 'volume']
+    missing = [col for col in required if col not in df.columns]
 
-    # ✅ 모든 컬럼을 소문자로 통일
-    df.columns = [col.lower() for col in df.columns]
+    for col in missing:
+        if col == 'adjclose' and 'close' in df.columns:
+            df['adjclose'] = df['close']
+        elif col == 'close' and 'adjclose' in df.columns:
+            df['close'] = df['adjclose']
+        else:
+            df[col] = 0.0
 
-    # ✅ 누락된 'close' 컬럼을 'adjclose'로 보완
-    if 'close' not in df.columns and 'adjclose' in df.columns:
-        df['close'] = df['adjclose']
-
-    # ✅ 필수 컬럼 확인
-    cols = ['open', 'high', 'low', 'close', 'adjclose', 'volume']
-    missing = [col for col in cols if col not in df.columns]
-    if missing:
-        print(f"[에러] {ticker} 저장 실패. 누락된 컬럼: {missing}")
+    # ✅ 모든 가격 값이 0인지 확인
+    if df[required].sum().sum() == 0:
+        print(f"[red]⚠ 경고: {ticker}의 가격 데이터가 모두 0입니다. 저장을 중단합니다.[/red]")
         return
 
-    # ✅ 날짜 컬럼 생성 및 정리
-    df['date'] = df.index.astype(str)
-    df['ticker'] = ticker
-    df[cols] = df[cols].astype(float)
-    df = df[['date', 'ticker'] + cols]
+    if not missing:
+        print(f"[green]✔ {ticker} 저장 완료[/green]")
+    else:
+        print(f"[yellow]⚠ {ticker} 데이터에 누락된 컬럼 {missing}을 보완하여 저장합니다.[/yellow]\n")
 
+    df = df.reset_index()
+    df['date'] = pd.to_datetime(df['Date']).dt.strftime("%Y-%m-%d")
+    df['ticker'] = ticker
+    df = df[['date', 'ticker'] + required]
+
+    conn = sqlite3.connect(db_path)
     df.to_sql("prices", conn, if_exists="append", index=False)
     conn.close()
 
-def load_prices(ticker, start_date=None):
-    conn = sqlite3.connect(DB_FILE, check_same_thread=False)
-    q = f"SELECT * FROM prices WHERE ticker = ?"
-    if start_date:
-        q += f" AND date >= ?"
-        df = pd.read_sql(q, conn, params=(ticker, start_date))
-    else:
-        df = pd.read_sql(q, conn, params=(ticker,))
-    if df.empty:
+def load_prices(ticker: str, start: str = "2023-01-01", db_path="portpulse.db"):
+    ensure_db(db_path)
+    try:
+        conn = sqlite3.connect(db_path)
+        query = f"SELECT * FROM prices WHERE ticker = ? AND date >= ?"
+        df = pd.read_sql(query, conn, params=(ticker, start))
+        conn.close()
+
+        if df.empty:
+            return None
+
+        df['date'] = pd.to_datetime(df['date'])
+        df = df.sort_values("date")
+
+        # 종가 누락 보안
+        if 'adjclose' not in df.columns and 'close' in df.columns:
+            df['adjclose'] = df['close']
+        elif 'close' not in df.columns and 'adjclose' in df.columns:
+            df['close'] = df['adjclose']
+
+        df.set_index('date', inplace=True)
+        return df
+    except Exception as e:
+        print(f"[red]데이터 로드 오류: {e}[/red]")
         return None
-    df['date'] = pd.to_datetime(df['date'], utc=True)
-    df.set_index('date', inplace=True)
-    return df
