@@ -8,11 +8,10 @@ from data.db import load_prices, save_prices, ensure_db
 ensure_db()
 
 def fetch_price_data(start="2022-07-01", end=None):
-    # 먼저 DB에서 조회
+    ensure_db()
     tsla = load_prices("TSLA", start)
     tsll = load_prices("TSLL", start)
 
-    # 존재하지 않으면 API 호출 후 저장
     if tsla is None:
         tsla = yf.Ticker("TSLA").history(start=start, end=end, auto_adjust=True)
         save_prices(tsla, "TSLA")
@@ -20,17 +19,21 @@ def fetch_price_data(start="2022-07-01", end=None):
         tsll = yf.Ticker("TSLL").history(start=start, end=end, auto_adjust=True)
         save_prices(tsll, "TSLL")
 
-    # ✅ 열 이름 표준화 적용
-    rename_map = {
-        'Open': 'open', 'High': 'high', 'Low': 'low',
-        'Close': 'close', 'Adj Close': 'adjclose', 'Volume': 'volume'
-    }
-    tsla = tsla.rename(columns={k: v for k, v in rename_map.items() if k in tsla.columns})
-    tsll = tsll.rename(columns={k: v for k, v in rename_map.items() if k in tsll.columns})
-
+    # 열 이름 표준화
     for df in [tsla, tsll]:
+        if 'Close' not in df.columns:
+            if 'close' in df.columns:
+                df['Close'] = df['close']
+            elif 'AdjClose' in df.columns:
+                df['Close'] = df['AdjClose']
+            else:
+                raise ValueError(f"Cannot find 'Close' column in {df.columns}")
         df.index = pd.to_datetime(df.index)
         df.index.name = 'Date'
+
+    # 디버깅 출력
+    #print(f"TSLA columns: {tsla.columns.tolist()}")
+    #print(f"TSLL columns: {tsll.columns.tolist()}")
 
     return tsla, tsll
 
