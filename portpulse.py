@@ -1,4 +1,4 @@
-# portpulse.py
+# ✅ portpulse.py 수정
 import argparse
 from datetime import datetime
 from core.fetch import fetch_price_data, fetch_vix_data, fetch_fear_greed_index, fetch_interest_rate
@@ -7,6 +7,11 @@ from core.signal import decide_allocation, explain_allocation_reason
 from core.backtest import run_backtest, compute_performance_metrics, print_performance_table
 from core.optimize import run_optimization
 from rich import print
+from rich.table import Table
+from rich.console import Console
+from rich.text import Text
+from core.portfolio import load_trade_log, get_current_holdings, get_initial_holdings
+from core.portfolio import ensure_database
 
 # ✅ 누락 컬럼 보완 함수 포함
 def normalize_adjclose(df):
@@ -21,12 +26,15 @@ def normalize_adjclose(df):
         df["Close"] = df["AdjClose"]
     return df
 
-
 def analyze_today():
+    console = Console()
     print("\n[bold cyan]📊 오늘의 시장 지표 및 기술 지표 기반 분석[/bold cyan]\n")
     tsla_df, tsll_df = fetch_price_data()
+
     tsla_df = normalize_adjclose(tsla_df)
     tsla_df = add_technical_indicators(tsla_df)
+    tsll_df = normalize_adjclose(tsll_df)
+
     latest_date = tsla_df.index[-1]
     latest = tsla_df.loc[latest_date]
     price = latest['AdjClose']
@@ -57,21 +65,111 @@ def analyze_today():
 
     print(f"[bold yellow]📅 분석 기준일: {latest_date.date()}[/bold yellow]\n")
     print(explanation)
-    print("\n[bold green]💡 제안된 내일 포트폴리오 비중:[/bold green]")
+
+    trade_log = load_trade_log()
+    current = get_current_holdings(trade_log)
+    initial = get_initial_holdings(trade_log)
+    tsla_price = tsla_df.iloc[-1]['AdjClose']
+    tsll_price = tsll_df.iloc[-1]['AdjClose']
+
+    print("\n[bold green]📊 현재 포트폴리오 분석[/bold green]")
+
+    print("[bold]* 초기 투자 자산[/bold]")
+    initial_cost = 0.0
+    table_initial = Table(show_header=True, header_style="bold", title="")
+    table_initial.add_column("Ticker", justify="center")
+    table_initial.add_column("수량", justify="right")
+    table_initial.add_column("단가", justify="right")
+    table_initial.add_column("금액", justify="right")
+
+    for ticker in ["TSLA", "TSLL"]:
+        shares = initial[ticker]["shares"]
+        price = initial[ticker]["price"]
+        value = shares * price
+        initial_cost += value
+        table_initial.add_row(ticker, str(shares), f"${price:.2f}", f"${value:,.2f}")
+
+    console.print(table_initial)
+
+    print("[bold]* 현재 자산 구성 및 수익률[/bold]")
+    total_value = 0.0
+    asset_rows = []
+    for ticker in ["TSLA", "TSLL"]:
+        shares = current[ticker]["shares"]
+        cost = current[ticker]["cost"]
+        price = tsla_price if ticker == "TSLA" else tsll_price
+        value = price * shares
+        pnl = (price - cost) / cost * 100 if cost > 0 else 0
+        total_value += value
+        asset_rows.append((ticker, shares, cost, value, pnl))
+
+    table_current = Table(show_header=True, header_style="bold", title="")
+    table_current.add_column("Ticker", justify="center")
+    table_current.add_column("수량", justify="right")
+    table_current.add_column("평균단가", justify="right")
+    table_current.add_column("평가금액", justify="right")
+    table_current.add_column("수익률", justify="right")
+    table_current.add_column("비중", justify="right")
+
+    for ticker, shares, cost, value, pnl in asset_rows:
+        weight = (value / total_value) * 100 if total_value > 0 else 0
+        table_current.add_row(ticker, str(shares), f"${cost:.2f}", f"${value:,.2f}", f"{pnl:.2f}%", f"{weight:.1f}%")
+
+    console.print(table_current)
+
+    print(f"\n💰 총 평가액: ${total_value:,.2f}")
+    if initial_cost > 0:
+        overall_pnl = (total_value - initial_cost) / initial_cost * 100
+        color = "green" if overall_pnl >= 0 else "red"
+        pnl_text = Text(f"📈 전체 포트폴리오 수익률: {overall_pnl:.2f}%", style=color)
+        console.print(pnl_text)
+
+    if total_value == 0:
+        print("[yellow]\n보유 자산 없음 → 리밸런싱 제안 생략[/yellow]")
+        return
+
+    print("\n[bold green]📌 제안된 내일 포트폴리오 비중[/bold green]")
     print(f"TSLA: {w_tsla*100:.1f}%  |  TSLL: {w_tsll*100:.1f}%")
 
+    print("\n[bold green]🔁 리밸런싱 제안[/bold green]")
+    target_tsla_amt = total_value * w_tsla
+    target_tsll_amt = total_value * w_tsll
+    current_tsla_amt = tsla_price * current["TSLA"]["shares"]
+    current_tsll_amt = tsll_price * current["TSLL"]["shares"]
+    delta_tsla = target_tsla_amt - current_tsla_amt
+    delta_tsll = target_tsll_amt - current_tsll_amt
+
+    if delta_tsll < -1:
+        print(f"TSLL {-delta_tsll / tsll_price:.0f}주 매도 권장")
+    if delta_tsla < -1:
+        print(f"TSLA {-delta_tsla / tsla_price:.0f}주 매도 권장")
+    if delta_tsll > 1:
+        print(f"TSLL {delta_tsll / tsll_price:.0f}주 매수 권장")
+    if delta_tsla > 1:
+        print(f"TSLA {delta_tsla / tsla_price:.0f}주 매수 권장")
 
 def run_backtest_mode():
     print("\n[bold cyan]📈 백테스트 모드 실행 중...[/bold cyan]\n")
     tsla_df, tsll_df = fetch_price_data()
     tsla_df = normalize_adjclose(tsla_df)
     tsla_df = add_technical_indicators(tsla_df)
-    strategy_vals, tsla_vals, tsll_vals = run_backtest(tsla_df, tsll_df)
+
+    def allocation_fn(today):
+        return decide_allocation(
+            today['RSI'], today['MACD'], today['MACD_signal'], today['MACD_hist'],
+            today['AdjClose'], today['BB_upper'], today['BB_lower'], today['ATR']
+        )
+
+    # 백테스트 실행
+    strategy_vals, tsla_vals, tsll_vals = run_backtest(tsla_df, tsll_df, allocation_fn=allocation_fn)
+
+    # 성과 지표 계산
     strat_metrics = compute_performance_metrics(strategy_vals)
     tsla_metrics = compute_performance_metrics(tsla_vals)
     tsll_metrics = compute_performance_metrics(tsll_vals)
-    print_performance_table(strat_metrics, tsla_metrics, tsll_metrics)
 
+    # 결과 출력
+    print_performance_table(strat_metrics, tsla_metrics, tsll_metrics)
 
 def run_simulation_mode(start, end):
     print(f"\n[bold cyan]🧪 시뮬레이션 모드 실행 중: {start} ~ {end}[/bold cyan]\n")
@@ -86,6 +184,7 @@ def run_simulation_mode(start, end):
 
 
 def main():
+    ensure_database("portpulse.db")
     parser = argparse.ArgumentParser(description="PortPulse 포트폴리오 전략 분석 도구")
     parser.add_argument("--backtest", action="store_true", help="백테스트 실행")
     parser.add_argument("--simulate", nargs=2, metavar=("START_DATE", "END_DATE"),
