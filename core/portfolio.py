@@ -1,4 +1,4 @@
-# ✅ core/portfolio.py
+# core/portfolio.py
 import pandas as pd
 from rich.table import Table
 from rich.console import Console
@@ -6,7 +6,7 @@ from rich.text import Text
 import os
 import sqlite3
 
-def ensure_database(file_path="portpulse.db"):
+def ensure_database(file_path="data/portpulse.db"):
     if not os.path.exists(file_path):
         print(f"[yellow]⚠ 데이터베이스 파일이 존재하지 않습니다. 새로 생성합니다: {file_path}[/yellow]")
         conn = sqlite3.connect(file_path)
