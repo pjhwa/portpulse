@@ -1,6 +1,7 @@
 # portpulse.py
 import argparse
 from datetime import datetime
+from utils import normalize_adjclose
 from core.fetch import fetch_price_data, fetch_vix_data, fetch_fear_greed_index, fetch_interest_rate
 from core.indicators import add_all_indicators
 from core.signal import custom_decide_allocation_extended, explain_allocation_reason
@@ -14,19 +15,6 @@ from rich.table import Table
 from rich.console import Console
 from rich.text import Text
 
-def normalize_adjclose(df):
-    df.columns = [col.lower() for col in df.columns]
-    if "adjclose" not in df.columns:
-        if "close" in df.columns:
-            df["adjclose"] = df["close"]
-        elif "adj close" in df.columns:
-            df["adjclose"] = df["adj close"]
-        else:
-            raise ValueError("Cannot find a suitable column to set as 'adjclose'")
-    if "close" not in df.columns and "adjclose" in df.columns:
-        df["close"] = df["adjclose"]
-    return df
-
 def analyze_today():
     console = Console()
     print("\n[bold cyan]📊 오늘의 시장 지표 및 기술 지표 기반 분석[/bold cyan]\n")
@@ -37,11 +25,8 @@ def analyze_today():
     tsla_df = normalize_adjclose(tsla_df)
     tsll_df = normalize_adjclose(tsll_df)
 
-    if tsla_df.empty:
-        print(f"[red]⚠ TSLA 데이터가 비어 있습니다. 분석을 중단합니다.[/red]")
-        return
-    if tsll_df.empty:
-        print(f"[red]⚠ TSLL 데이터가 비어 있습니다. 분석을 중단합니다.[/red]")
+    if tsla_df.empty or tsll_df.empty:
+        print(f"[red]⚠ 데이터가 비어 있습니다. 분석을 중단합니다.[/red]")
         return
 
     tsla_df = add_all_indicators(tsla_df)
@@ -58,6 +43,14 @@ def analyze_today():
     thresholds = load_latest_thresholds()
     if thresholds is None:
         thresholds = get_default_thresholds()
+    else:
+        print("\n[bold green]📈 최적화된 성과 지표[/bold green]")
+        if 'cagr' in thresholds:
+            print(f" - CAGR: {thresholds['cagr']*100:.2f}%")
+        if 'cumulative_return' in thresholds:
+            print(f" - 누적 수익률: {thresholds['cumulative_return']*100:.2f}%")
+        if 'max_return' in thresholds:
+            print(f" - 최대 수익률: {thresholds['max_return']*100:.2f}%")
 
     w_tsla, w_tsll = custom_decide_allocation_extended(latest, thresholds)
     explanation = explain_allocation_reason(latest, w_tsla, w_tsll, thresholds)
@@ -176,16 +169,18 @@ def run_simulation_mode(start, end, thresholds):
     print(f"[bold yellow]Default 수익률: {def_return:.2f}%[/bold yellow]")
 
 def main():
-    ensure_database("portpulse.db")
+    ensure_database("data/portpulse.db")
     parser = argparse.ArgumentParser(description="PortPulse 포트폴리오 전략 분석 도구")
     parser.add_argument("--backtest", action="store_true", help="백테스트 실행")
     parser.add_argument("--simulate", nargs=2, metavar=("START_DATE", "END_DATE"), help="시뮬레이션 실행 (YYYY-MM-DD 형식)")
     parser.add_argument("--optimize", action="store_true", help="자동 최적화 실행")
-    parser.add_argument("--metric", type=str, default="sharpe", help="최적화 기준 (sharpe, cagr, mdd)")
+    parser.add_argument("--metric", type=str, default="sharpe", choices=["sharpe", "cagr", "mdd"], help="최적화 기준 (sharpe, cagr, mdd)")
+    parser.add_argument("--min-return", type=float, default=0.0, help="최소 누적 수익률 (기본값: 0.0%)")
     args = parser.parse_args()
 
     if args.backtest:
-        run_backtest_mode()
+        #run_backtest_mode()
+        run_optimization_and_save(metric=args.metric, min_return=args.min_return)
     elif args.simulate:
         try:
             # 날짜 형식 변환
@@ -201,7 +196,8 @@ def main():
         except ValueError:
             print("[red]날짜 형식이 올바르지 않습니다. YYYY-MM-DD 형식으로 입력하세요.[/red]")
     elif args.optimize:
-        run_optimization_and_save(metric=args.metric)
+        #run_optimization_and_save(metric=args.metric)
+        run_optimization_and_save(metric=args.metric, min_return=args.min_return)
     else:
         analyze_today()
 
