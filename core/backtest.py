@@ -66,19 +66,30 @@ def run_backtest(tsla_df, tsll_df, allocation_fn=None):
 
 def compute_performance_metrics(equity_curve):
     """
-    수익곡선을 기반으로 CAGR, Volatility, Sharpe, Max Drawdown을 계산합니다.
+    수익곡선을 기반으로 성과 지표를 계산합니다.
+    - CAGR: 연평균 복리 수익률
+    - Volatility: 연간 변동성
+    - Sharpe: 샤프 비율
+    - MaxDrawdown: 최대 손실률
+    - CumulativeReturn: 누적 수익률
+    - MaxReturn: 최대 수익률
     """
     returns = equity_curve.pct_change().dropna()
     cagr = (equity_curve.iloc[-1] / equity_curve.iloc[0]) ** (252 / len(equity_curve)) - 1
     volatility = returns.std() * np.sqrt(252)
-    sharpe = returns.mean() / returns.std() * np.sqrt(252)
+    sharpe = returns.mean() / returns.std() * np.sqrt(252) if returns.std() != 0 else 0
     drawdown = 1 - equity_curve / equity_curve.cummax()
     max_dd = drawdown.max()
+    cumulative_return = (equity_curve.iloc[-1] / equity_curve.iloc[0]) - 1
+    max_return = (equity_curve.max() / equity_curve.iloc[0]) - 1
+
     return {
         "CAGR": cagr,
         "Volatility": volatility,
         "Sharpe": sharpe,
-        "MaxDrawdown": max_dd
+        "MaxDrawdown": max_dd,
+        "CumulativeReturn": cumulative_return,
+        "MaxReturn": max_return
     }
 
 def print_performance_table(strat_metrics, tsla_metrics, tsll_metrics):
@@ -91,18 +102,17 @@ def print_performance_table(strat_metrics, tsla_metrics, tsll_metrics):
     """
     console = Console()
     table = Table(title="Performance Summary: Dynamic Strategy vs TSLA vs TSLL")
-
     table.add_column("Metric")
     table.add_column("Dynamic Strategy", justify="right")
     table.add_column("TSLA Only", justify="right")
     table.add_column("TSLL Only", justify="right")
 
-    for key in ["CAGR", "Volatility", "Sharpe", "MaxDrawdown"]:
+    metrics_keys = ["CAGR", "Volatility", "Sharpe", "MaxDrawdown", "CumulativeReturn", "MaxReturn"]
+    for key in metrics_keys:
         table.add_row(
             key,
             f"{strat_metrics[key]*100:.2f}%" if key != "Sharpe" else f"{strat_metrics[key]:.2f}",
             f"{tsla_metrics[key]*100:.2f}%" if key != "Sharpe" else f"{tsla_metrics[key]:.2f}",
             f"{tsll_metrics[key]*100:.2f}%" if key != "Sharpe" else f"{tsll_metrics[key]:.2f}"
         )
-
     console.print(table)
