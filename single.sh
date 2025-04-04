@@ -5,6 +5,11 @@ cat portpulse.py >> codes.txt
 echo "----------------------------------------------------------------------------------------" >> codes.txt
 echo "" >> codes.txt
 
+echo ">>>> utils.py code <<<<" >> codes.txt
+cat utils.py >> codes.txt
+echo "----------------------------------------------------------------------------------------" >> codes.txt
+echo "" >> codes.txt
+
 echo ">>>> data/db.py code <<<<" >> codes.txt
 cat data/db.py >> codes.txt
 echo "----------------------------------------------------------------------------------------" >> codes.txt
